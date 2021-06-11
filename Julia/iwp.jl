@@ -5,8 +5,8 @@ using ForwardDiff
 using PyPlot
 using ControlSystems
 using Distributions
-# using GaussianProcesses
-# using BayesianOptimization
+using GaussianProcesses
+using BayesianOptimization
 
 abstract type AbstractPolicy <: Function end
 abstract type AbstractEnvironment end
@@ -29,7 +29,7 @@ struct LinearPolicy{T<:Real} <: AbstractPolicy
     max_ctrl::T
 end
 (u::LinearPolicy)(x) = clamp(-dot(u.K, x), -u.max_ctrl, u.max_ctrl)
-(u::LinearPolicy)(p, x) = clamp(-dot(u.K, x), -u.max_ctrl, u.max_ctrl)
+(u::LinearPolicy)(p, x) = clamp(-dot(p, x), -u.max_ctrl, u.max_ctrl)
 
 struct IWPParams{T}
     gravity::T
@@ -87,7 +87,7 @@ function IWPEnv(T::Type=Float32;
         policy=LinearPolicy(
                 Vector{Float32}(undef, 4), Matrix{Float32}(undef, 4, 4), 
                 Matrix{Float32}(undef, 1, 1), max_ctrl),
-        dt=T(1/1000),
+        dt=T(1/20),
         tspan=(T(0),T(10)),
     )
 
@@ -209,8 +209,28 @@ function simulate(env::AbstractEnvironment, x0, tf=last(env.tspan); saveat=env.d
     )
 end
 
+function simulate(env::AbstractEnvironment, x0, k, tf=last(env.tspan); saveat=env.dt)
+    OrdinaryDiffEq.solve(
+        ODEProblem(
+            ODEFunction((x,p,t) -> dynamics(env, x, env.policy(p,x))),
+            x0,
+            (first(env.tspan), tf),
+            k
+        ),
+        Tsit5(),
+        # reltol=1e-8, abstol=1e-6,
+        saveat=saveat
+    )
+end
+
 function simulate!(env::AbstractEnvironment, x0, tf=last(env.tspan); saveat=env.dt)
     env.trajectory = Array(simulate(env, x0, tf, saveat=saveat))
+    env.ctrl_input = mapslices(env.policy, env.trajectory, dims=1) |> vec
+    env.loss = lqr_loss(env, env.trajectory)
+end
+
+function simulate!(env::AbstractEnvironment, x0, k, tf=last(env.tspan); saveat=env.dt)
+    env.trajectory = Array(simulate(env, x0, k, tf, saveat=saveat))
     env.ctrl_input = mapslices(env.policy, env.trajectory, dims=1) |> vec
     env.loss = lqr_loss(env, env.trajectory)
 end
@@ -227,6 +247,64 @@ end
 
 
 ## Bayesian Optimization to find acceptable linear policy gains from this point options
-function f(k)
+
+function find_gains_BO(env::AbstractEnvironment, reset::Bool=false)
+
+    function f(env::AbstractEnvironment, k, x0=[1*π/180, 0.5, 0., 0])
+        simulate!(env, x0, k)
+        return env.loss
+    end
+    g(k) = f(env, k)
+
+    # Choose as a model an elastic GP with input dimensions 2.
+    # The GP is called elastic, because data can be appended efficiently.
+    model = ElasticGPE(4,                            # 2 input dimensions
+    mean = MeanConst(0.),         
+    kernel = SEArd([0., 0., 0., 0.], 5.),
+    logNoise = 0.,
+    capacity = 3000)              # the initial capacity of the GP is 3000 samples.
+    set_priors!(model.mean, [Normal(1, 2)])
+
+    # Optimize the hyperparameters of the GP using maximum a posteriori (MAP) estimates every 50 steps
+    modeloptimizer = MAPGPOptimizer(every = 50, noisebounds = [-4, 3],       # bounds of the logNoise
+                kernbounds = [[-1, -1, -1, -1, 0], [4, 4, 4, 4, 2]],  # bounds of the 3 parameters GaussianProcesses.get_param_names(model.kernel)
+                maxeval = 40)
+
+    # modeloptimizer = NoModelOptimizer()
+
+    opt = BOpt(g,
+    model,
+    UpperConfidenceBound(),                   # type of acquisition
+    modeloptimizer,                        
+    [-10., -10., -10., -10.], [0., 0., 0., 0.],                     # lowerbounds, upperbounds         
+    repetitions = 5,                          # evaluate the function for each input 5 times
+    maxiterations = 1000,                      # evaluate at 100 input positions
+    sense = Min,                              # minimize the function
+    acquisitionoptions = (method = :LD_LBFGS, # run optimization of acquisition function with NLopts :LD_LBFGS method
+                restarts = 5,       # run the NLopt method from 5 random initial conditions each time.
+                maxtime = 0.1,      # run the NLopt method for at most 0.1 second each time
+                maxeval = 1000),    # run the NLopt methods for at most 1000 iterations (for other options see https://github.com/JuliaOpt/NLopt.jl)
+    verbosity = Progress)
+
+
+    # x = Array{Array{Float64, 1}, 1}()
+    # push!(x, K_estimate[:])
+    # push!(x, K_true[:])
+    # y = -f.(x)
+    # append!(model, hcat(x...), y)
+
+    opt = BOpt(g,
+    model,
+    #    UpperConfidenceBound(),
+    # ThompsonSamplingSimple(),
+    ExpectedImprovement(),
+    modeloptimizer,                        
+    [-10., -10., -10., -10.], [0., 0., 0., 0.], 
+    maxiterations = 1000,
+    sense = Min,
+    initializer_iterations = 0
+    )
+
     
+    result = boptimize!(opt)
 end
