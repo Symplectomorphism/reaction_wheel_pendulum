@@ -20,7 +20,7 @@ struct LQRPolicy{T<:Real} <: AbstractPolicy
     max_ctrl::T
 end
 (u::LQRPolicy)(x) = clamp(-dot(u.K, x), -u.max_ctrl, u.max_ctrl)
-(u::LQRPolicy)(p, x) = clamp(-dot(u.K, x), -u.max_ctrl, u.max_ctrl)
+(u::LQRPolicy)(p, x) = clamp(-dot(p, x), -u.max_ctrl, u.max_ctrl)
 
 struct LinearPolicy{T<:Real} <: AbstractPolicy
     K::AbstractArray
@@ -195,7 +195,7 @@ function lqr_gains(env::IWPEnv{T}; xbar=T[0,0,0,0], Q=I(4), R=1.0) where {T<:Rea
     A, B, K, S
 end
 
-function simulate(env::AbstractEnvironment, x0, tf=last(env.tspan); saveat=env.dt)
+function simulate(env::AbstractEnvironment, x0; tf=last(env.tspan), saveat=env.dt)
     OrdinaryDiffEq.solve(
         ODEProblem(
             ODEFunction((x,p,t) -> dynamics(env, x, env.policy(p,x))),
@@ -209,7 +209,7 @@ function simulate(env::AbstractEnvironment, x0, tf=last(env.tspan); saveat=env.d
     )
 end
 
-function simulate(env::AbstractEnvironment, x0, k, tf=last(env.tspan); saveat=env.dt)
+function simulate(env::AbstractEnvironment, x0, k; tf=last(env.tspan), saveat=env.dt)
     OrdinaryDiffEq.solve(
         ODEProblem(
             ODEFunction((x,p,t) -> dynamics(env, x, env.policy(p,x))),
@@ -223,14 +223,14 @@ function simulate(env::AbstractEnvironment, x0, k, tf=last(env.tspan); saveat=en
     )
 end
 
-function simulate!(env::AbstractEnvironment, x0, tf=last(env.tspan); saveat=env.dt)
-    env.trajectory = Array(simulate(env, x0, tf, saveat=saveat))
+function simulate!(env::AbstractEnvironment, x0; tf=last(env.tspan), saveat=env.dt)
+    env.trajectory = Array(simulate(env, x0; tf=tf, saveat=saveat))
     env.ctrl_input = mapslices(env.policy, env.trajectory, dims=1) |> vec
     env.loss = lqr_loss(env, env.trajectory)
 end
 
-function simulate!(env::AbstractEnvironment, x0, k, tf=last(env.tspan); saveat=env.dt)
-    env.trajectory = Array(simulate(env, x0, k, tf, saveat=saveat))
+function simulate!(env::AbstractEnvironment, x0, k; tf=last(env.tspan), saveat=env.dt)
+    env.trajectory = Array(simulate(env, x0, k; tf=tf, saveat=saveat))
     env.ctrl_input = mapslices(env.policy, env.trajectory, dims=1) |> vec
     env.loss = lqr_loss(env, env.trajectory)
 end
@@ -267,7 +267,7 @@ function find_gains_BO(env::AbstractEnvironment, reset::Bool=false)
 
     # Optimize the hyperparameters of the GP using maximum a posteriori (MAP) estimates every 50 steps
     modeloptimizer = MAPGPOptimizer(every = 50, noisebounds = [-4, 3],       # bounds of the logNoise
-                kernbounds = [[-1, -1, -1, -1, 0], [4, 4, 4, 4, 2]],  # bounds of the 3 parameters GaussianProcesses.get_param_names(model.kernel)
+                kernbounds = [[-1, -1, -1, -1, 0], [4, 4, 4, 4, 20]],  # bounds of the 3 parameters GaussianProcesses.get_param_names(model.kernel)
                 maxeval = 40)
 
     # modeloptimizer = NoModelOptimizer()
