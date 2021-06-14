@@ -264,7 +264,7 @@ end
 
 ## Bayesian Optimization to find acceptable linear policy gains from this point options
 
-function find_gains_BO(env::AbstractEnvironment, reset::Bool=false)
+function find_gains_BO(env::AbstractEnvironment, reset::Bool=false; maxiters::Int=100)
 
     function f(env::AbstractEnvironment, k, x0=[1*π/180, 0.5, 0., 0])
         simulate!(env, x0, k)
@@ -316,7 +316,7 @@ function find_gains_BO(env::AbstractEnvironment, reset::Bool=false)
     # ExpectedImprovement(),
     modeloptimizer,                        
     [-10., -10., -10., -10.], [0., 0., 0., 0.], 
-    maxiterations = 200,
+    maxiterations = maxiters,
     sense = Min,
     initializer_iterations = 0
     )
