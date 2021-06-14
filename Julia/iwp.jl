@@ -79,7 +79,7 @@ function IWPEnv(T::Type=Float32;
         l=T(1/m*(mp*lp+mr*lr)),
         J=T(Jp + mp*lp*lp + mr*lr*lr),
         r=T(45/34*13/3),
-        max_ctrl=T(5.0),
+        max_ctrl=T(0.25),
         # policy=LQRPolicy(
         #     rand(Float32, 4, 4), rand(Float32, 4), rand(Float32,4), 
         #     rand(Float32, 4, 4), Matrix{Float32}(undef, 1, 1), max_ctrl
