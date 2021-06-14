@@ -138,6 +138,22 @@ function Base.show(io::IO, env::IWPEnv)
     print(io, "dt=$(env.dt) ")
 end
 
+function _known_dynamics(env::IWPEnv, x, u)
+    q1, q2, q1dot, q2dot = x
+    J = env.params.J
+    Jr = env.params.Jr
+    m = env.params.m
+    g = env.params.gravity
+    l = env.params.l
+    r = env.params.r
+    return [
+        x[3],
+        x[4],
+        1/(J*0.8) * (m*g*l*sin(q1) - r*u),  # Introduced a 20% error into J
+        1/Jr * r * u
+    ]
+end
+
 function _dynamics(env::IWPEnv, x, u)
     q1, q2, q1dot, q2dot = x
     J = env.params.J
@@ -188,8 +204,8 @@ end
 
 
 function lqr_gains(env::IWPEnv{T}; xbar=T[0,0,0,0], Q=I(4), R=1.0) where {T<:Real}
-    A = ForwardDiff.jacobian(x->_dynamics(env, x, 0), xbar)
-    B = ForwardDiff.derivative(u->_dynamics(env, xbar, u), 0)
+    A = ForwardDiff.jacobian(x->_known_dynamics(env, x, 0), xbar)
+    B = ForwardDiff.derivative(u->_known_dynamics(env, xbar, u), 0)
     S = care(A,B,Q,R)
     K = R\B'*S
     A, B, K, S
@@ -267,7 +283,7 @@ function find_gains_BO(env::AbstractEnvironment, reset::Bool=false)
 
     # Optimize the hyperparameters of the GP using maximum a posteriori (MAP) estimates every 50 steps
     modeloptimizer = MAPGPOptimizer(every = 50, noisebounds = [-4, 3],       # bounds of the logNoise
-                kernbounds = [[-1, -1, -1, -1, 0], [4, 4, 4, 4, 10]],  # bounds of the 3 parameters GaussianProcesses.get_param_names(model.kernel)
+                kernbounds = [[-1, -1, -1, -1, 0], [4, 4, 4, 4, 10]],  # bounds of the 5 parameters GaussianProcesses.get_param_names(model.kernel)
                 maxeval = 40)
 
     # modeloptimizer = NoModelOptimizer()
@@ -296,15 +312,16 @@ function find_gains_BO(env::AbstractEnvironment, reset::Bool=false)
     opt = BOpt(g,
     model,
     #    UpperConfidenceBound(),
-    # ThompsonSamplingSimple(),
-    ExpectedImprovement(),
+    ThompsonSamplingSimple(),
+    # ExpectedImprovement(),
     modeloptimizer,                        
     [-10., -10., -10., -10.], [0., 0., 0., 0.], 
-    maxiterations = 1000,
+    maxiterations = 200,
     sense = Min,
     initializer_iterations = 0
     )
 
     
     result = boptimize!(opt)
+    return result, opt
 end
